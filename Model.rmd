@@ -1,0 +1,142 @@
+
+
+
+#Load database and select healthy subjects
+
+```{r}
+
+#Load the database (db)
+db <- read.csv("~/Library/CloudStorage/OneDrive-King'sCollegeLondon/xxx.csv")
+
+
+#Select the healthy subjects
+
+healthy<- db [db$healthy_tot==1, ]
+
+
+```
+
+
+#Prepare the data
+
+```{r XGB-preperation}
+
+library ("caret")
+
+
+#Select the variables of interest in the healthy subjects (n=3,008) for constructing the XGBoost regression model
+
+db_0<- healthy %>% 
+  select (LV-EDV, LV-ESV, LV-SV, LV-EF, LV-M, RV-EDV, RV-ESV, RV-SV, RV-EF, Chrono_Age, RA-cond, RA-res, RA-pump, LA-cond, LA-res, LA-pump, AoED, AoES, AoD, AHA_1, AHA_2, AHA_3, AHA_4,AHA_5, AHA_6, AHA_7, AHA_8, AHA_9, AHA_10, AHA_11, AHA_12, AHA_13, AHA_14, AHA_15, AHA_16,Global, Sex) 
+
+#Split the sample between train (0.80) and test (0.20) sets
+
+set.seed(020374)
+train <- sample (1:nrow (db_0), nrow (db_0)*0.80) 
+
+train_data<- as.matrix (db_0 [train, ])
+test_data <- as.matrix (db_0 [-train, ])
+```
+LIST OF VARIABLES
+
+1) Chrono_Age	Chronological age
+2) Sex	
+3) LV-EDV (ml)	Left ventricular end-diastolic volume
+4) LV-ESV (ml)	Left ventricular end-systolic volume
+5) LV-SV (ml)	Left ventricular stroke volume
+6) LV-EF (%)	Left ventricular ejection fraction
+7) LV-M (g)	Left ventricular mass at end-diastole
+8) AHA_X(mm)	Left ventricular wall thickness of the 16-AHA segments (n=16)
+9) Global (mm)	Average left ventricular wall thickness 
+10) RV-EDV (ml)	Right ventricular end-diastolic volume
+11) RV-ESV (ml)	Right ventricular end-systolic volume
+12) RV-SV (ml)	Right ventricular stroke volume
+13) RV-EF (%)	Right ventricular ejection fraction
+14) LA-res (ml)	Left atrial reservoir volume at ventricular end-systole
+15) LA-cond (ml)	Left atrial conduit volume immediately before atrial contraction
+16) LA-pump (ml)	Left atrial pump volume immediately after the atrial contraction 
+17) RA-res (ml)	Right atrial reservoir volume at ventricular end-systole
+18) RA-cond (ml)	Right atrial conduit volume immediately before atrial contraction
+19) RA-pump (ml)	Left atrial pump volume immediately after the atrial contraction
+20) AoED (mm2)	Ascending aorta cross-sectional area at end-diastole 
+21) AoES (mm2)	Ascending aorta cross-sectional area at end-systole
+22) AoD (10−3 mmHg−1) Aortic distensibility of the ascending aorta 
+
+
+
+# XGB boost regression model
+
+```{r}
+library ("xgboost")
+
+grid_tune<- expand_grid(
+  nrounds = c(500, 1000, 2000, 3000), # Number of trees
+  max_depth = c(2,4,6), # Maximum depth of a tree
+  eta = c(0.025, 0.05, 0.1, 0.3), # Learning rate: scale the contribution of each tree by a factor of 0 < eta < 1
+  gamma = c(0, 0.05, 0.1, 0.5, 0.7, 1.0), # Minimum loss reduction required to make a further partition on a leaf node of the tree
+  colsample_bytree = c(0.025, 0.50, 0.75, 1),
+  min_child_weight = c(1,2,3), # Minimum sum of instance weight (hessian) needed in a child
+  subsample = c(0.5, 0.75, 1.0) # Subsample ratio of the training instance
+)
+
+#A five-fold cross-validation approach was used for hyperparameter optimisation. Based upon the cross-validation results, the best XGBoost model was identified by the lowest mean squared error (RMSE) in the prediction of chronological age. 
+
+train_control <- trainControl(method = "cv",
+                              number=5,
+                              verboseIter = TRUE,
+                              returnData = FALSE,
+                              returnResamp = "all",
+                              classProbs = TRUE,
+                              allowParallel = TRUE)
+
+#Model LookUp
+set.seed (1)
+xgb_tune <- train (x = train_matrix_new,
+                   y = train_ca_new,
+                   trControl= train_control,
+                   tuneGrid = grid_tune,
+                   method = "xgbTree",
+                   verbose = TRUE)
+
+xgb_tune # full list of the parametrised models 
+xgb_tune$bestTune # best model
+#The hyperparameter optimisation process yielded the following values: nrounds = 500, eta=0.025, max_depth =2, colsample_bytree =1, min_child_weight =2, subsample = 0.5. The model was then trained with the hyperparameter values in the training set and tested using the ‘predict’ function in the held-out sample (test-set)#
+
+library ("Metrics")
+
+pred<-predict (xgb_tune_sex, test_data)
+mae (test_data [,10], pred)   #MAE
+mse (test_data [,10], pred) #MSE
+rmse (test_data [,10], pred)
+cor (pred, test_data [,10])
+summary (pred)
+str(pred)
+
+
+```
+
+# Correction for the dilution-bias in the train set - the same approach was also applied in the whole dataset (db) 
+
+```{r}
+
+set.seed(4)
+pred.train<-predict (xgb_tune, train_data) #HeartAge is calculated in the training set
+
+train_data<- train_data%>% 
+  cbind (age_xgb=pred.train) %>% #[pred.train=age_xgb], thus age_xgbis HeartAge
+  cbind (ca=train_data [,10])
+
+# HeartAge-gap is measured in the train_data set by subtracting HeartAge from the chronological age "ca"
+gap_xgb <- (train_data [, "age_xgb"] - train_data [, "ca"])
+train_data <-cbind (train_data, gap_xgb)
+
+# Regressing chronological age ("ca") onto HeartAge-gap ("gap_xgb")
+lin.mod <- lm (db_train$gap_xgb ~ db_train$ca)
+
+# Correction of HeartAge ("age_xgb_c") by subtracting the uncorrected HeartAge ("age_xgb")  to the residuals of "linear-mod" model
+age_xgb_c <- (db_train$age_xgb - lin.mod$fitted.values)
+db_train<- cbind (db_train, age_xgb_c)
+
+
+```
+
