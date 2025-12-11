@@ -121,9 +121,10 @@ str(pred)
 
 set.seed(4)
 pred.train<-predict (xgb_tune, train_data) #HeartAge is calculated in the training set
+pred_test  <- predict(xgb_tune, test_data)
 
 train_data<- train_data%>% 
-  cbind (age_xgb=pred.train) %>% #[pred.train=age_xgb], thus age_xgbis HeartAge
+  cbind (age_xgb=pred.train) %>% #[pred.train=age_xgb], thus age_xgb is HeartAge
   cbind (ca=train_data [,10])
 
 # HeartAge-gap is measured in the train_data set by subtracting HeartAge from the chronological age "ca"
@@ -133,10 +134,12 @@ train_data <-cbind (train_data, gap_xgb)
 # Regressing chronological age ("ca") onto HeartAge-gap ("gap_xgb")
 lin.mod <- lm (db_train$gap_xgb ~ db_train$ca)
 
-# Correction of HeartAge ("age_xgb_c") by subtracting the uncorrected HeartAge ("age_xgb")  to the residuals of "linear-mod" model
-age_xgb_c <- (db_train$age_xgb - lin.mod$fitted.values)
-db_train<- cbind (db_train, age_xgb_c)
+train.bias <- predict (lin.mod, train_data$ca)
+test.bias <- predict (lin.mod, test_data$ca)
 
+# Bias-corrected HeartAge 
+age_xgb_c_train <- (db_train$age_xgb - train.bias )
+age_xgb_c_test <- (db_test$age_xgb - test.bias )
 
 ```
 
